@@ -1,0 +1,147 @@
+#!/usr/bin/env ruby
+require 'optparse'
+require 'optparse/time'
+require 'yaml'
+require 'date'
+
+TASKS_RES = File.expand_path('~/res/rubykron_tasks')
+
+class Task
+  attr :start, :message, :recurring, :frequency
+  def initialize(start, message, recurring, freq = nil)
+    @start = start
+    @message = message
+    @recurring = recurring
+    @freq = nil
+  end
+end
+
+class Kron
+  def initialize(file)
+   @tasks_file = file
+  end
+
+  def add_task(date, message, recurring, freq = nil)
+    task = Task.new(date, message, recurring, freq)
+    tasks = get_tasks
+    tasks << task
+    write_tasks(tasks)
+  end
+
+  def get_tasks()
+    if File.exist?(@tasks_file)
+      YAML::load(File.read(@tasks_file))
+    else
+      []
+    end
+  end
+
+  def write_tasks(task_list)
+    File.write(@tasks_file, YAML::dump(task_list))
+  end
+
+  def kron
+    while true
+      tasks = get_tasks()
+      tasks.clone.each_with_index do |task, index|
+        if (task.start - Time.now) < 0
+          `beep`
+          `tmux rename-window -t${TMUX_PANE} "#{task.message}"`
+          if not task.recurring
+            tasks.delete_at(index)
+          else
+            task.start = task.start + task.frequency
+          end
+        end
+      end
+
+      write_tasks(tasks)
+      sleep(10)
+    end
+  end
+end
+
+def get_usage
+  msg = 'Usage: rubykron --start => starts the rubykron server'
+  msg += "\n"
+  msg += '       rubykron --message "This is a reminder" --in 1hr => adds a task that starts in'
+  msg += "\n"
+  msg += '       1 hour and does not repeat'
+  msg += "\n"
+  msg += '       rubykron --message "This is a repeated reminder" --freq 1 => adds a task that'
+  msg += "\n"
+  msg += '       starts every hour'
+end
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = get_usage
+
+  opts.on("-m", "--message MESSAGE", "The message to display for the reminder") do |msg|
+    options[:message] = msg
+  end
+
+  opts.on("-s", "--start", "Start the rubykron server") do |start|
+    options[:start] = true
+  end
+
+  opts.on("-i", "--in N", Float, "Sets the timer to start the new task") do |start_time|
+    options[:start_time] = Time.now + (start_time * 3600)
+  end
+
+  opts.on("-t", "--time TIME", Time, "Run reminder at the given time of day.") do |time_of_day|
+    options[:start_time] = time_of_day
+  end
+
+  opts.on("-r", "--repeat", "Sets whether this reminder is recurring or not.") do |recurring|
+    options[:recurring] = true
+  end
+
+  opts.on("-f", "--freq N", "Sets the frequency in hours with which this task will repeat.") do |freq|
+    options[:recurring] = true
+    options[:frequency] = freq * 3600
+  end
+
+  opts.on("-l", "--list", "Lists the currently running reminders.") do |list|
+    options[:list] = true
+  end
+end.parse!
+
+kron = Kron.new(TASKS_RES)
+if not options[:message].nil?
+  date = nil
+  if not options[:start_time].nil?
+    date = options[:start_time]
+  else
+    puts "Start time for the task not specified"
+    exit(1)
+  end
+
+  recurring = !options[:recurring].nil?
+  freq = nil
+  if options[:frequency].nil?
+    freq = 24 * 3600 # 1 per day
+  else
+    freq = options[:frequency]
+  end
+
+  kron.add_task(date, options[:message], recurring, freq)
+end
+
+if options[:list]
+  kron_tasks = kron.get_tasks()
+  if kron_tasks.count > 0
+    kron_tasks.each do |task|
+      puts "Task: #{task.message}"
+      puts "Date-time: #{task.start}"
+      puts "Is recurring: #{task.recurring}"
+      puts ''
+    end
+  else
+    puts "There are no tasks pending in rubykron"
+  end
+end
+
+if options[:start]
+  kron.kron
+end
